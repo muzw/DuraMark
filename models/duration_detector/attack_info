@@ -1,0 +1,71 @@
+
+# ... AUDIO_FORMAT_SETS = ...
+
+# === 新增：定义训练时的干扰配置 ===
+# 建议：在线训练(On-the-fly)尽量只用轻量级干扰，重型干扰建议离线预处理
+TRAIN_PERTURBATIONS_CONFIG = {
+    # "gaussian_noise": [40, 30, 20, 10, 5],  
+    # "background_noise": [40, 30, 20, 10, 5], 
+    # "quantization": [2**2, 2**3, 2**4, 2**5, 2**6],
+    # "highpass": [0.1, 0.2, 0.3, 0.4],                           # 高通滤波比例参数
+    # "lowpass": [0.1, 0.2, 0.3, 0.4, 0.5],
+    # "echo": [0.1, 0.3, 0.5, 0.7, 0.9],
+    # "smooth": [6, 10, 14, 18, 22],  
+
+    # "gaussian_noise": [35, 25, 15, 12, 8],
+    # "background_noise": [35, 25, 15, 12, 8],
+    # "quantization": [6, 12, 24, 48, 96],
+    # "highpass": [0.15, 0.25, 0.35, 0.45],
+    # "lowpass": [0.15, 0.25, 0.35, 0.45],
+    # "echo": [0.2, 0.4, 0.6, 0.8, 1.0],
+    # "smooth": [8, 12, 16, 20, 24],
+
+    "gaussian_noise": [25, 15, 12, 8, 4],
+    "background_noise": [25, 15, 12, 8, 4],
+    "quantization": [12, 24, 48],
+    "lowpass": [0.05, 0.15, 0.25, 0.35],
+    "smooth": [8, 12, 16, 20, 24],
+
+    "echo": [0.2, 0.4, 0.6, 0.8, 1.0],
+    # "mp3": [6, 14, 20],
+    "opus": [1, 3, 6],
+    # "metricgan_plus": ["metricgan-plus-voicebank"],
+}
+
+# === 新增：初始化增强器 ===
+# device='cpu' 最安全，防止多进程 DataLoader 冲突。
+# 如果 num_workers=0 且显存足够，可以改为 'cuda'  
+augmentor = AudioAugmentor(TRAIN_PERTURBATIONS_CONFIG, device='mlu:0')
+
+
+def augment_data(data, augmentor_instance=augmentor, mode='train'):
+    """
+    在线音频增强处理函数
+    应放置在 resample 之后 (此时已有 waveform)，truncate 之前
+    """
+    for sample in data:
+        # 仅在训练模式下，且存在 waveform 时进行增强
+        if mode == 'train' and 'speech' in sample:
+                waveform = sample['speech'] # [1, T] or [C, T]
+                sr = sample['sample_rate']
+                # print(waveform.shape, sr)
+                # 应用增强 (设置 50% 或其他概率在 AudioAugmentor 内部控制，或在这里控制)
+                # 注意：增强可能会改变音频长度 (如 time_stretch)
+                # 但因为这步是在 truncate 之前，所以长度变化是安全的
+                augmented_wav = augmentor_instance.apply(waveform, sr, p=0.5)
+                
+                # 维度检查与修复：确保还是 Tensor 且维度正确
+                if not isinstance(augmented_wav, torch.Tensor):
+                    augmented_wav = torch.tensor(augmented_wav)
+                
+                # 确保是 [C, T] 格式 (torchaudio习惯)
+                if augmented_wav.dim() == 1:
+                    augmented_wav = augmented_wav.unsqueeze(0)
+                
+                max_val = augmented_wav.abs().max()
+                if max_val > 1.0:
+                    augmented_wav = augmented_wav / (max_val + 1e-8)
+                # print(augmented_wav.shape)
+                sample['speech'] = augmented_wav
+        
+        yield sample

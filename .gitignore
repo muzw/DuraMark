@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Model weights
+*.pt
+*.onnx
+*.pth
+*.plan
+*.zip
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Virtualenv
+venv/
+.venv/
+env/
+
+# Misc
+*.log
+*.tmp
