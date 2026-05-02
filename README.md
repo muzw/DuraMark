@@ -1,11 +1,13 @@
 # DuraMark
 
-**DuraMark** is a duration-based audio watermarking framework for speech synthesis. It embeds invisible watermarks into synthesized speech by subtly adjusting phoneme-level durations during TTS generation, and detects them using a dedicated duration detector model — remaining robust against various audio perturbations (noise, compression, re-recording, etc.).
+**DuraMark** is a duration-based audio watermarking framework for Chinese speech synthesis. It embeds invisible watermarks into synthesized speech by subtly adjusting syllable-level durations during TTS generation, and detects them using a dedicated duration detector model — remaining robust against various audio perturbations (noise, compression, re-recording, etc.).
+
+> Currently supports **Chinese (Mandarin)** only. In Chinese, each character corresponds to one syllable, making character-level duration modulation a natural fit for syllable-level watermarking.
 
 ## How It Works
 
-1. **Embedding**: During TTS synthesis (CosyVoice), watermark bits are encoded by modulating character-level durations — even frame counts represent bit `0`, odd frame counts represent bit `1`.
-2. **Detection**: A DurationDetector model recovers per-character durations from the audio. A soft-voting / DP-alignment algorithm then decodes the watermark bits, even when the audio has been distorted.
+1. **Embedding**: During TTS synthesis (CosyVoice), watermark bits are encoded by modulating per-syllable (per-character) durations — even frame counts represent bit `0`, odd frame counts represent bit `1`.
+2. **Detection**: A DurationDetector model recovers per-syllable durations from the audio. A soft-voting / DP-alignment algorithm then decodes the watermark bits, even when the audio has been distorted.
 
 ## Environment Setup (Conda)
 
