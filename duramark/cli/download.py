@@ -16,18 +16,10 @@ from typing import Dict, List
 
 MODEL_MANIFEST = {
     "tts": [
-        # Main TTS model for watermark embedding
-        # ("tts/llm.pt", "GOOGLE_DRIVE_ID_OR_URL", "LLM checkpoint"),
-        # ("tts/flow.pt", "GOOGLE_DRIVE_ID_OR_URL", "Flow model checkpoint"),
-        # ("tts/hift.pt", "GOOGLE_DRIVE_ID_OR_URL", "HiFiGAN checkpoint"),
-        # ("tts/cosyvoice.yaml", "GOOGLE_DRIVE_ID_OR_URL", "Model config"),
-        # ("tts/campplus.onnx", "GOOGLE_DRIVE_ID_OR_URL", "Speaker embedding"),
-        # ("tts/speech_tokenizer_v1.onnx", "GOOGLE_DRIVE_ID_OR_URL", "Speech tokenizer"),
+        ("tts.tar.gz", "1wzcKHDvnBFvZexTmZnukh1ixsAQXlNUJ", "TTS model archive (~2.1 GB)"),
     ],
     "detector": [
-        # Duration detector for watermark extraction
-        # ("duration_detector/duration_detector.pt", "GOOGLE_DRIVE_ID_OR_URL", "Detector checkpoint"),
-        # ("duration_detector/duration_detector.yaml", "GOOGLE_DRIVE_ID_OR_URL", "Detector config"),
+        ("duration_detector.tar.gz", "1H0WJ7nQIchS9mZRcSAa-XPYchIpRXQIN", "Detector model archive (~600 MB)"),
     ],
 }
 
@@ -133,20 +125,38 @@ def run_download(args=None):
         print(f"\n--- Downloading {model_set} models ---")
         for entry in MODEL_MANIFEST[model_set]:
             if len(entry) == 3:
-                rel_path, url, desc = entry
+                rel_path, file_id, desc = entry
             else:
                 continue
 
             dest_path = os.path.join(output_dir, rel_path)
 
-            if url.startswith("hf://"):
-                repo_and_file = url[5:]
-                parts = repo_and_file.split("/", 1)
-                if len(parts) == 2:
-                    repo_id, filename = parts
-                    download_from_hf(repo_id, filename, dest_path, desc)
-            else:
-                download_file(url, dest_path, desc)
+            if os.path.exists(dest_path):
+                print(f"  [Skip] {desc} already exists: {dest_path}")
+                continue
+
+            # Download via gdown (Google Drive)
+            print(f"  [Download] {desc} ({os.path.basename(rel_path)})")
+            os.makedirs(output_dir, exist_ok=True)
+            try:
+                import gdown
+                url = f"https://drive.google.com/uc?id={file_id}"
+                gdown.download(url, dest_path, quiet=False)
+            except ImportError:
+                print(f"    Please install gdown: pip install gdown")
+                continue
+            except Exception as e:
+                print(f"    Download failed: {e}")
+                continue
+
+            # Extract tar.gz
+            if dest_path.endswith(".tar.gz"):
+                print(f"  [Extract] {os.path.basename(rel_path)} -> {output_dir}")
+                import tarfile
+                with tarfile.open(dest_path, "r:gz") as tar:
+                    tar.extractall(output_dir)
+                os.remove(dest_path)
+                print(f"  [Done] {desc}")
 
     print(f"\nAll downloads complete. Models saved to: {output_dir}")
 

@@ -13,6 +13,12 @@ build/
 *.pth
 *.plan
 *.zip
+*.tar.gz
+models/
+test_data/
+test_e2e_output/
+test_output/
+output/
 
 # IDE
 .vscode/

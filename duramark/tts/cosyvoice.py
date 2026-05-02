@@ -20,6 +20,7 @@ import torch
 from duramark.tts.frontend import CosyVoiceFrontEnd
 from duramark.tts.model import CosyVoiceModel, CosyVoice2Model
 from duramark.tts.utils.file_utils import logging
+logging.getLogger().setLevel(logging.WARNING)
 
 
 class CosyVoice:
@@ -62,6 +63,22 @@ class CosyVoice:
     def inference_sft(self, tts_text, spk_id, stream=False, speed=1.0, text_frontend=True):
         for i in tqdm(self.frontend.text_normalize(tts_text, split=True, text_frontend=text_frontend)):
             model_input = self.frontend.frontend_sft(i, spk_id)
+            start_time = time.time()
+            logging.info('synthesis text {}'.format(i))
+            for model_output in self.model.tts(**model_input, stream=stream, speed=speed):
+                speech_len = model_output['tts_speech'].shape[1] / self.sample_rate
+                logging.info('yield speech len {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))
+                yield model_output
+                start_time = time.time()
+
+    def inference_no_ref(self, tts_text, stream=False, speed=1.0, text_frontend=True, watermark_bits=None, out_path=None):
+        """Synthesize speech with watermark embedding, without a reference audio.
+
+        When no reference is available, skip all prompt-related processing
+        and generate speech directly from text with watermark bits.
+        """
+        for i in self.frontend.text_normalize(tts_text, split=True, text_frontend=text_frontend):
+            model_input = self.frontend.frontend_no_ref(i, watermark_bits=watermark_bits, out_path=out_path, model_dir=self.model_dir)
             start_time = time.time()
             logging.info('synthesis text {}'.format(i))
             for model_output in self.model.tts(**model_input, stream=stream, speed=speed):

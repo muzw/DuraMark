@@ -10,7 +10,6 @@ import multiprocessing
 import queue as queue_lib
 from multiprocessing import Pool, Manager
 
-import regex
 import numpy as np
 import torch
 import torchaudio
@@ -19,40 +18,23 @@ import tqdm
 import traceback
 import gc
 
-
-def keep_chinese(text):
-    return regex.sub(r'\P{Han}+', '', text)
-
-
-def split_list(lst, n):
-    if n <= 0:
-        return [lst]
-    if not lst:
-        return []
-    avg = len(lst) // n
-    remainder = len(lst) % n
-    out = []
-    start = 0
-    for i in range(n):
-        length = avg + 1 if i < remainder else avg
-        if length > 0:
-            out.append(lst[start : start + length])
-            start += length
-    return out
-
-
-def generate_random_watermark_bits(length):
-    random_bits = torch.randint(0, 2, (length,)).tolist()
-    return random_bits
+from duramark.common.text import keep_chinese
+from duramark.common.file_io import split_list
+from duramark.common.watermark import generate_random_watermark_bits
 
 
 def check_existing_files(
     text_lines, ref_text_dict, ref_wav_dict, out_dir, watermark_lengths, enable_watermark
 ):
-    """Build task list, skipping already-generated files and missing dependencies."""
+    """Build task list, skipping already-generated files and missing dependencies.
+
+    When ref_text_dict/ref_wav_dict are empty (no-ref mode), tasks are
+    simpler: (key, text, target_len) instead of the full ref-based tuple.
+    """
     tasks = []
     existing_records = set()
     missing_dependency_count = 0
+    use_ref = len(ref_text_dict) > 0 and len(ref_wav_dict) > 0
 
     if os.path.exists(out_dir):
         for f in os.listdir(out_dir):
@@ -72,7 +54,10 @@ def check_existing_files(
     if len(existing_records) > 0:
         print(f"   [Check] Ignored {len(existing_records)} existing files.")
 
-    def try_create_task(key_in, text_in, target_len_in):
+    def try_create_task_no_ref(key_in, text_in, target_len_in):
+        return (key_in, text_in, target_len_in)
+
+    def try_create_task_ref(key_in, text_in, target_len_in):
         ref_audio_in = ref_wav_dict.get(key_in)
         ref_text_raw_in = ref_text_dict.get(key_in)
         if ref_audio_in is None or ref_text_raw_in is None:
@@ -90,6 +75,8 @@ def check_existing_files(
             target_len_in,
             ref_word_interval_path,
         )
+
+    try_create_task = try_create_task_ref if use_ref else try_create_task_no_ref
 
     if not enable_watermark:
         for line in text_lines:
@@ -126,15 +113,21 @@ def check_existing_files(
     return tasks
 
 
-def gen_audio(task_chunk, model_name, out_dir, process_id, gpu_id, queue):
-    """Worker function: loads model and generates watermarked audio for a task chunk."""
+def gen_audio(task_chunk, model_name, out_dir, process_id, gpu_id, queue, use_ref=True):
+    """Worker function: loads model and generates watermarked audio for a task chunk.
+
+    Args:
+        task_chunk: List of tasks. With ref: (key, text, ref_text, ref_audio, target_len, ref_interval_path).
+                    Without ref: (key, text, target_len).
+        use_ref: Whether to use reference audio for voice cloning.
+    """
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
 
     success_count = 0
     fail_count = 0
 
     try:
-        print(f"[Worker {process_id}] Start Init on GPU {gpu_id}...")
+        tqdm.tqdm.write(f"[Worker {process_id}] Init on GPU {gpu_id}...")
 
         # Inject Matcha-TTS path (needed before importing duramark.tts)
         _matcha_path = os.path.join(
@@ -145,15 +138,21 @@ def gen_audio(task_chunk, model_name, out_dir, process_id, gpu_id, queue):
             sys.path.insert(0, _matcha_path)
 
         from duramark.tts.cosyvoice import CosyVoice
-        from duramark.tts.utils.file_utils import load_wav
 
         resampler = Resample(orig_freq=22050, new_freq=16000)
-
         cosyvoice = CosyVoice(model_name, load_jit=False, load_onnx=False)
-        print(f"[Worker {process_id}] Model Loaded Successfully.")
+        tqdm.tqdm.write(f"[Worker {process_id}] Model loaded.")
+
+        if use_ref:
+            from duramark.tts.utils.file_utils import load_wav
 
         with torch.inference_mode():
-            for i, (key, text, ref_text, ref_audio, target_len, ref_word_interval_path) in enumerate(task_chunk):
+            for i, task in enumerate(task_chunk):
+                if use_ref:
+                    key, text, ref_text, ref_audio, target_len, ref_word_interval_path = task
+                else:
+                    key, text, target_len = task
+
                 if target_len is None:
                     out_path = os.path.join(out_dir, f"{key}.wav")
                     watermark_bits = None
@@ -162,18 +161,30 @@ def gen_audio(task_chunk, model_name, out_dir, process_id, gpu_id, queue):
                     wm_str = "".join(map(str, watermark_bits))
                     out_path = os.path.join(out_dir, f"{key}_{wm_str}.wav")
 
-                try:
-                    ref_word_interval = np.load(ref_word_interval_path)
-                    prompt_speech_16k = load_wav(ref_audio, 16000)
+                short_text = text[:40] + "..." if len(text) > 40 else text
+                wm_info = f"  WM: {wm_str}" if watermark_bits else ""
+                ref_info = " [no ref]" if not use_ref else ""
+                tqdm.tqdm.write(f"[{key}]{ref_info} {short_text}{wm_info}")
 
-                    output_gen = cosyvoice.inference_zero_shot(
-                        text,
-                        ref_text,
-                        ref_word_interval,
-                        prompt_speech_16k,
-                        stream=False,
-                        watermark_bits=watermark_bits,
-                    )
+                try:
+                    if use_ref:
+                        ref_word_interval = np.load(ref_word_interval_path)
+                        prompt_speech_16k = load_wav(ref_audio, 16000)
+
+                        output_gen = cosyvoice.inference_zero_shot(
+                            text,
+                            ref_text,
+                            ref_word_interval,
+                            prompt_speech_16k,
+                            stream=False,
+                            watermark_bits=watermark_bits,
+                        )
+                    else:
+                        output_gen = cosyvoice.inference_no_ref(
+                            text,
+                            stream=False,
+                            watermark_bits=watermark_bits,
+                        )
 
                     for j in output_gen:
                         resample_wav = resampler(j['tts_speech'])
@@ -182,7 +193,7 @@ def gen_audio(task_chunk, model_name, out_dir, process_id, gpu_id, queue):
                     success_count += 1
                     queue.put(1)
 
-                    del output_gen, prompt_speech_16k, ref_word_interval
+                    del output_gen
 
                 except Exception:
                     print(f"\n[Worker {process_id}] ERROR Processing {key}!")
@@ -213,22 +224,28 @@ def run_embed(args):
     out_dir = args.output_dir
     os.makedirs(out_dir, exist_ok=True)
 
-    # Read input files
+    # Read input file
     text_lines = open(args.input).read().splitlines()
 
-    ref_text_lines = open(args.ref_text).read().splitlines()
-    ref_text_dict = {
-        l.split()[0]: l.split(' ', 1)[1]
-        for l in ref_text_lines
-        if len(l.split()) >= 2
-    }
+    # Determine mode: with or without reference audio
+    use_ref = args.ref_text is not None and args.ref_wav is not None
 
-    ref_wav_lines = open(args.ref_wav).read().splitlines()
-    ref_wav_dict = {
-        l.split()[0]: l.split(' ', 1)[1]
-        for l in ref_wav_lines
-        if len(l.split()) >= 2
-    }
+    if use_ref:
+        ref_text_lines = open(args.ref_text).read().splitlines()
+        ref_text_dict = {
+            l.split()[0]: l.split(' ', 1)[1]
+            for l in ref_text_lines
+            if len(l.split()) >= 2
+        }
+        ref_wav_lines = open(args.ref_wav).read().splitlines()
+        ref_wav_dict = {
+            l.split()[0]: l.split(' ', 1)[1]
+            for l in ref_wav_lines
+            if len(l.split()) >= 2
+        }
+    else:
+        ref_text_dict = {}
+        ref_wav_dict = {}
 
     enable_wm = True
     wm_len = args.watermark_length
@@ -255,7 +272,7 @@ def run_embed(args):
         assigned_gpu = (i // WORKERS_PER_GPU) % NUM_GPUS
         if task_chunks[i]:
             args_list.append((
-                task_chunks[i], model_name, out_dir, i, assigned_gpu, queue,
+                task_chunks[i], model_name, out_dir, i, assigned_gpu, queue, use_ref,
             ))
 
     total_tasks = len(tasks)

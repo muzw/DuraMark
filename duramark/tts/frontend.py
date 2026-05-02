@@ -30,11 +30,9 @@ except ImportError:
     try:
         from tn.chinese.normalizer import Normalizer as ZhNormalizer
         from tn.english.normalizer import Normalizer as EnNormalizer
-        print("failed to import ttsfrd, use WeTextProcessing instead")
     except ImportError:
         ZhNormalizer = None
         EnNormalizer = None
-        print("failed to import ttsfrd and WeTextProcessing, text normalization disabled")
     use_ttsfrd = False
 from duramark.tts.utils.frontend_utils import contains_chinese, replace_blank, replace_corner_mark, remove_bracket, spell_out_number, split_paragraph
 
@@ -141,7 +139,7 @@ class CosyVoiceFrontEnd:
             if self.use_ttsfrd:
                 texts = [i["text"] for i in json.loads(self.frd.do_voicegen_frd(text))["sentences"]]
                 text = ''.join(texts)
-            else:
+            elif self.zh_tn_model is not None:
                 text = self.zh_tn_model.normalize(text)
                 text = text.replace("\n", "")
                 text = replace_blank(text)
@@ -152,15 +150,21 @@ class CosyVoiceFrontEnd:
                 text = re.sub(r'[，,、]+$', '。', text)
                 texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
                                              token_min_n=60, merge_len=20, comma_split=False))
+            else:
+                # No text normalization available, return raw text as single segment
+                texts = [text]
         else:
             if self.use_ttsfrd:
                 texts = [i["text"] for i in json.loads(self.frd.do_voicegen_frd(text))["sentences"]]
                 text = ''.join(texts)
-            else:
+            elif self.en_tn_model is not None:
                 text = self.en_tn_model.normalize(text)
                 text = spell_out_number(text, self.inflect_parser)
                 texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
                                              token_min_n=60, merge_len=20, comma_split=False))
+            else:
+                # No text normalization available, return raw text as single segment
+                texts = [text]
         if split is False:
             return text
         return texts
@@ -344,6 +348,37 @@ class CosyVoiceFrontEnd:
             'flow_embedding': embedding,
             "out_path": out_path,
             "watermark_bits": watermark_bits
+        }
+        return model_input
+
+    def frontend_no_ref(self, tts_text, watermark_bits=None, out_path=None, model_dir=None):
+        """Build model input without a reference audio for watermark-only synthesis.
+
+        If a spk_embeddings.pt file exists in model_dir, randomly sample from it.
+        Otherwise fall back to a fixed-seed random embedding.
+        """
+        tts_text_token, tts_text_token_len = self._extract_text_token(tts_text)
+
+        # Load embedding pool if available
+        if model_dir:
+            pool_path = os.path.join(model_dir, 'spk_embeddings.pt')
+            if os.path.exists(pool_path):
+                pool = torch.load(pool_path, map_location=self.device)
+                idx = torch.randint(0, pool.shape[0], (1,)).item()
+                embedding = pool[idx].unsqueeze(0)
+            else:
+                rng = torch.Generator(device=self.device).manual_seed(42)
+                embedding = torch.randn(1, 192, generator=rng, device=self.device)
+        else:
+            rng = torch.Generator(device=self.device).manual_seed(42)
+            embedding = torch.randn(1, 192, generator=rng, device=self.device)
+        model_input = {
+            'text': tts_text_token,
+            'text_len': tts_text_token_len,
+            'llm_embedding': embedding,
+            'flow_embedding': embedding,
+            'out_path': out_path,
+            'watermark_bits': watermark_bits,
         }
         return model_input
 

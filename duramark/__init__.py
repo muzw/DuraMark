@@ -2,8 +2,23 @@
 
 import os
 import sys
+import warnings
+import logging
 
 from duramark._version import __version__
+
+# Suppress noisy third-party logging and warnings at import time
+warnings.filterwarnings("ignore")
+logging.getLogger("urllib3").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("diffusers").setLevel(logging.WARNING)
+logging.getLogger("onnxruntime").setLevel(logging.ERROR)
+try:
+    import onnxruntime
+    onnxruntime.set_default_logger_severity(3)
+except ImportError:
+    pass
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
 # Inject Matcha-TTS third-party dependency path
 _duramark_dir = os.path.dirname(os.path.abspath(__file__))
