@@ -9,6 +9,7 @@ build/
 
 # Model weights
 *.pt
+!duramark/data/*.pt
 *.onnx
 *.pth
 *.plan

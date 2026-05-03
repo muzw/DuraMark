@@ -359,16 +359,21 @@ class CosyVoiceFrontEnd:
         """
         tts_text_token, tts_text_token_len = self._extract_text_token(tts_text)
 
-        # Load embedding pool if available
+        # Load embedding pool: model_dir first, then package data, then random
+        pool_path = None
         if model_dir:
-            pool_path = os.path.join(model_dir, 'spk_embeddings.pt')
-            if os.path.exists(pool_path):
-                pool = torch.load(pool_path, map_location=self.device)
-                idx = torch.randint(0, pool.shape[0], (1,)).item()
-                embedding = pool[idx].unsqueeze(0)
-            else:
-                rng = torch.Generator(device=self.device).manual_seed(42)
-                embedding = torch.randn(1, 192, generator=rng, device=self.device)
+            p = os.path.join(model_dir, 'spk_embeddings.pt')
+            if os.path.exists(p):
+                pool_path = p
+        if pool_path is None:
+            pkg_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'spk_embeddings.pt')
+            if os.path.exists(pkg_path):
+                pool_path = pkg_path
+
+        if pool_path:
+            pool = torch.load(pool_path, map_location=self.device)
+            idx = torch.randint(0, pool.shape[0], (1,)).item()
+            embedding = pool[idx].unsqueeze(0)
         else:
             rng = torch.Generator(device=self.device).manual_seed(42)
             embedding = torch.randn(1, 192, generator=rng, device=self.device)

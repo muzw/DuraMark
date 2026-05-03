@@ -61,9 +61,11 @@ This downloads and extracts the model archives from Google Drive into:
 - `./models/tts/` — TTS model (for watermark embedding)
 - `./models/duration_detector/` — Detector model (for watermark detection)
 
-### 5. (Optional) Build speaker embedding pool
+### 5. (Optional) Build custom speaker embedding pool
 
-For **no-reference** mode (synthesizing without a reference voice), you need a pool of pre-extracted speaker embeddings. The model will randomly select one during inference:
+For **no-reference** mode, the model needs a speaker embedding to control voice timbre. A default pool of 100 AISHELL speaker embeddings (`duramark/data/spk_embeddings.pt`, 78 KB) is included in the repository.
+
+To use your own voices, generate a custom pool from 16kHz WAV files:
 
 ```bash
 python scripts/extract_speaker_embeddings.py \
@@ -73,9 +75,9 @@ python scripts/extract_speaker_embeddings.py \
     --num_speakers 100
 ```
 
-If `spk_embeddings.pt` is not found, a fixed random embedding is used as fallback.
+The lookup order is: `models/tts/` → `duramark/data/` → random embedding.
 
-### 5. Verify model loading
+### 6. Verify model loading
 
 ```bash
 # Test detector model loading
